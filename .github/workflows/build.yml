@@ -1,35 +1,98 @@
-name: Build Openwrt
+name: Build Gaojianli AX3600 stock
+
 on:
-    push:
-        branches: ["master"]
+  workflow_dispatch: # 仅手动触发
 
 jobs:
-    build:
-        runs-on: self-hosted
-        steps:
-            - uses: actions/checkout@v4
-            - uses: MasterworksIO/action-local-cache@2
-              name: "Load Toolchain Cache"
-              with:
-                path: './staging_dir'
-                key: 'staging_toolchain'
-            - uses: MasterworksIO/action-local-cache@2
-              name: "Load Feeds Cache"
-              with:
-                path: './feeds'
-                key: 'feeds'
-            - name: 'Update Feeds'
-              run: ./scripts/feeds update -a && ./scripts/feeds install -a
-            - name: "Copy config"
-              run: cp auto_build/ax3600.config .config && make defconfig && make oldconfig
-            - name: "Build"
-              run: make -j2 || make V=s
-            - name: Upload build artifacts
-              uses: actions/upload-artifact@v4
-              with:
-                name: ax3600
-                path: |
-                  bin/targets/qualcommax/ipq807x/*.bin
-                  bin/targets/qualcommax/ipq807x/*.ubi
-            - name: Clean
-              run: make clean
+  build:
+    runs-on: ubuntu-22.04 # 使用 GitHub 云端运行器
+
+    steps:
+      # 1. 创建 4G Swap，防止云端编译内存溢出（OOM）
+      - name: Create 4G Swap
+        run: |
+          sudo dd if=/dev/zero of=/home/runner/swapfile bs=1M count=4096
+          sudo chmod 600 /home/runner/swapfile
+          sudo mkswap /home/runner/swapfile
+          sudo swapon /home/runner/swapfile
+          free -h
+
+      # 2. 拉取你的仓库源码
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      # 3. 删除导致编译失败的 bonding 补丁（非常重要）
+      - name: Remove conflicting bonding patch
+        run: |
+          rm -f ./target/linux/qualcommax/patches-6.6/0600-4-qca-nss-ecm-support-net-bonding-over-LAG-interface.patch
+          echo "✅ 已删除 LAG bonding 冲突补丁"
+
+      # 4. 安装编译所需依赖
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev python3 python3-pip python3-setuptools python3-dev rsync unzip wget zlib1g-dev
+
+      # 5. 更新并安装 Feeds
+      - name: Update feeds
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      # 6. 生成大分区（-stock）配置，包含 NSS 和基础中文 LuCI
+      - name: Generate .config
+        run: |
+          echo "CONFIG_TARGET_qualcommax=y" > .config
+          echo "CONFIG_TARGET_qualcommax_ipq807x=y" >> .config
+          echo "CONFIG_TARGET_MULTI_PROFILE=y" >> .config
+          # 关键：适配大分区的目标
+          echo "CONFIG_TARGET_DEVICE_qualcommax_ipq807x_xiaomi_ax3600-stock=y" >> .config
+          
+          # NSS 核心驱动
+          echo "CONFIG_PACKAGE_kmod-qca-nss-drv=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-qca-nss-ecm=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-qca-nss-dp=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-qca-nss-clients=y" >> .config
+          echo "CONFIG_PACKAGE_nss-firmware-ipq8074=y" >> .config
+          
+          # WiFi ath11k
+          echo "CONFIG_PACKAGE_kmod-ath11k=y" >> .config
+          echo "CONFIG_PACKAGE_ath11k-firmware-ipq8074=y" >> .config
+          echo "CONFIG_PACKAGE_wpad-full=y" >> .config
+          
+          # LuCI 基础 + 中文
+          echo "CONFIG_PACKAGE_luci=y" >> .config
+          echo "CONFIG_PACKAGE_luci-base=y" >> .config
+          echo "CONFIG_PACKAGE_luci-mod-admin-full=y" >> .config
+          echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-firewall=y" >> .config
+          echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
+          echo "CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y" >> .config
+          
+          # 基础网络组件
+          echo "CONFIG_PACKAGE_pppoe-diagnostic=y" >> .config
+          echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
+          echo "CONFIG_PACKAGE_dropbear=y" >> .config
+          
+          # 禁用 SFE，避免与 NSS 冲突
+          echo "# CONFIG_PACKAGE_kmod-shortcut-fe is not set" >> .config
+          echo "# CONFIG_PACKAGE_kmod-shortcut-fe-cm is not set" >> .config
+
+          make defconfig
+          
+          # 二次强制关闭 SFE，防止 defconfig 自动将其拉入
+          sed -i 's/CONFIG_PACKAGE_kmod-shortcut-fe=y/# CONFIG_PACKAGE_kmod-shortcut-fe is not set/g' .config
+          sed -i 's/CONFIG_PACKAGE_kmod-shortcut-fe-cm=y/# CONFIG_PACKAGE_kmod-shortcut-fe-cm is not set/g' .config
+
+      # 7. 单线程编译，防止云端内存不足
+      - name: Compile firmware
+        run: make -j1 V=s
+
+      # 8. 上传固件（包含 factory.ubi 和 sysupgrade.bin）
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: AX3600-Gaojianli-stock-nss
+          path: |
+            bin/targets/qualcommax/ipq807x/openwrt-qualcommax-ipq807x-xiaomi_ax3600-stock-squashfs-sysupgrade.bin
+            bin/targets/qualcommax/ipq807x/openwrt-qualcommax-ipq807x-xiaomi_ax3600-stock-squashfs-factory.ubi
