@@ -1,14 +1,10 @@
-name: Build Gaojianli AX3600 stock
-
+name: Build Gaojianli AX3600 bigpart
 on:
   workflow_dispatch: # 仅手动触发
-
 jobs:
   build:
     runs-on: ubuntu-22.04 # 使用 GitHub 云端运行器
-
     steps:
-      # 1. 创建 4G Swap，防止云端编译内存溢出（OOM）
       - name: Create 4G Swap
         run: |
           sudo dd if=/dev/zero of=/home/runner/swapfile bs=1M count=4096
@@ -17,36 +13,32 @@ jobs:
           sudo swapon /home/runner/swapfile
           free -h
 
-      # 2. 拉取你的仓库源码
       - name: Checkout source
         uses: actions/checkout@v4
 
-      # 3. 删除导致编译失败的 bonding 补丁（非常重要）
-      - name: Remove conflicting bonding patch
-        run: |
-          rm -f ./target/linux/qualcommax/patches-6.6/0600-4-qca-nss-ecm-support-net-bonding-over-LAG-interface.patch
-          echo "✅ 已删除 LAG bonding 冲突补丁"
+      # 高渐离源码无此补丁，该步骤注释，可直接删除
+      # - name: Remove conflicting bonding patch
+      #   run: |
+      #     rm -f ./target/linux/qualcommax/patches-6.6/0600-4-qca-nss-ecm-support-net-bonding-over-LAG-interface.patch
+      #     echo "✅ 已删除 LAG bonding 冲突补丁"
 
-      # 4. 安装编译所需依赖
       - name: Install dependencies
         run: |
           sudo apt update
           sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev python3 python3-pip python3-setuptools python3-dev rsync unzip wget zlib1g-dev
 
-      # 5. 更新并安装 Feeds
       - name: Update feeds
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      # 6. 生成大分区（-stock）配置，包含 NSS 和基础中文 LuCI
       - name: Generate .config
         run: |
           echo "CONFIG_TARGET_qualcommax=y" > .config
           echo "CONFIG_TARGET_qualcommax_ipq807x=y" >> .config
           echo "CONFIG_TARGET_MULTI_PROFILE=y" >> .config
-          # 关键：适配大分区的目标
-          echo "CONFIG_TARGET_DEVICE_qualcommax_ipq807x_xiaomi_ax3600-stock=y" >> .config
+          # 关键：高渐离仓库大分区 bigpart
+          echo "CONFIG_TARGET_DEVICE_qualcommax_ipq807x_xiaomi_ax3600-bigpart=y" >> .config
           
           # NSS 核心驱动
           echo "CONFIG_PACKAGE_kmod-qca-nss-drv=y" >> .config
@@ -74,25 +66,25 @@ jobs:
           echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
           echo "CONFIG_PACKAGE_dropbear=y" >> .config
           
-          # 禁用 SFE，避免与 NSS 冲突
+          # 禁用 SFE
           echo "# CONFIG_PACKAGE_kmod-shortcut-fe is not set" >> .config
           echo "# CONFIG_PACKAGE_kmod-shortcut-fe-cm is not set" >> .config
-
           make defconfig
-          
-          # 二次强制关闭 SFE，防止 defconfig 自动将其拉入
           sed -i 's/CONFIG_PACKAGE_kmod-shortcut-fe=y/# CONFIG_PACKAGE_kmod-shortcut-fe is not set/g' .config
           sed -i 's/CONFIG_PACKAGE_kmod-shortcut-fe-cm=y/# CONFIG_PACKAGE_kmod-shortcut-fe-cm is not set/g' .config
 
-      # 7. 单线程编译，防止云端内存不足
       - name: Compile firmware
-        run: make -j1 V=s
+        run: make -j2 V=s
 
-      # 8. 上传固件（包含 factory.ubi 和 sysupgrade.bin）
+      - name: Print firmware MD5
+        run: |
+          cd bin/targets/qualcommax/ipq807x/
+          md5sum openwrt-qualcommax-ipq807x-xiaomi_ax3600-bigpart-*.ubi
+
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: AX3600-Gaojianli-stock-nss
+          name: AX3600-Gaojianli-bigpart-nss
           path: |
-            bin/targets/qualcommax/ipq807x/openwrt-qualcommax-ipq807x-xiaomi_ax3600-stock-squashfs-sysupgrade.bin
-            bin/targets/qualcommax/ipq807x/openwrt-qualcommax-ipq807x-xiaomi_ax3600-stock-squashfs-factory.ubi
+            bin/targets/qualcommax/ipq807x/openwrt-qualcommax-ipq807x-xiaomi_ax3600-bigpart-squashfs-sysupgrade.bin
+            bin/targets/qualcommax/ipq807x/openwrt-qualcommax-ipq807x-xiaomi_ax3600-bigpart-squashfs-factory.ubi
