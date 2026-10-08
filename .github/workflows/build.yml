@@ -1,26 +1,11 @@
-name: Build Gaojianli AX3600 bigpart
-on:
-  workflow_dispatch: # 仅手动触发
-jobs:
-  build:
-    runs-on: ubuntu-22.04 # 使用 GitHub 云端运行器
-    steps:
-      - name: Create 4G Swap
-        run: |
-          sudo dd if=/dev/zero of=/home/runner/swapfile bs=1M count=4096
-          sudo chmod 600 /home/runner/swapfile
-          sudo mkswap /home/runner/swapfile
-          sudo swapon /home/runner/swapfile
-          free -h
-
       - name: Checkout source
         uses: actions/checkout@v4
+        with:
+          submodules: true
+          depth: 1
 
-      # 高渐离源码无此补丁，该步骤注释，可直接删除
-      # - name: Remove conflicting bonding patch
-      #   run: |
-      #     rm -f ./target/linux/qualcommax/patches-6.6/0600-4-qca-nss-ecm-support-net-bonding-over-LAG-interface.patch
-      #     echo "✅ 已删除 LAG bonding 冲突补丁"
+      - name: Pull git submodules
+        run: git submodule update --init --recursive
 
       - name: Install dependencies
         run: |
@@ -37,22 +22,19 @@ jobs:
           echo "CONFIG_TARGET_qualcommax=y" > .config
           echo "CONFIG_TARGET_qualcommax_ipq807x=y" >> .config
           echo "CONFIG_TARGET_MULTI_PROFILE=y" >> .config
-          # 关键：高渐离仓库大分区 bigpart
           echo "CONFIG_TARGET_DEVICE_qualcommax_ipq807x_xiaomi_ax3600-bigpart=y" >> .config
           
-          # NSS 核心驱动
+          # 只保留基础包，删掉VIKINGYFY那一堆NSS私有CONFIG！
           echo "CONFIG_PACKAGE_kmod-qca-nss-drv=y" >> .config
           echo "CONFIG_PACKAGE_kmod-qca-nss-ecm=y" >> .config
           echo "CONFIG_PACKAGE_kmod-qca-nss-dp=y" >> .config
           echo "CONFIG_PACKAGE_kmod-qca-nss-clients=y" >> .config
-          echo "CONFIG_PACKAGE_nss-firmware-ipq8074=y" >> .config
+          echo "CONFIG_PACKAGE_nss-firmware-ipq807x=y" >> .config
           
-          # WiFi ath11k
           echo "CONFIG_PACKAGE_kmod-ath11k=y" >> .config
-          echo "CONFIG_PACKAGE_ath11k-firmware-ipq8074=y" >> .config
           echo "CONFIG_PACKAGE_wpad-full=y" >> .config
+          echo "CONFIG_PACKAGE_ipq-wifi-xiaomi_ax3600=m" >> .config
           
-          # LuCI 基础 + 中文
           echo "CONFIG_PACKAGE_luci=y" >> .config
           echo "CONFIG_PACKAGE_luci-base=y" >> .config
           echo "CONFIG_PACKAGE_luci-mod-admin-full=y" >> .config
@@ -61,12 +43,11 @@ jobs:
           echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
           echo "CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y" >> .config
           
-          # 基础网络组件
-          echo "CONFIG_PACKAGE_pppoe-diagnostic=y" >> .config
           echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
           echo "CONFIG_PACKAGE_dropbear=y" >> .config
+          echo "CONFIG_PACKAGE_firewall4=y" >> .config
+          echo "CONFIG_PACKAGE_htop=y" >> .config
           
-          # 禁用 SFE
           echo "# CONFIG_PACKAGE_kmod-shortcut-fe is not set" >> .config
           echo "# CONFIG_PACKAGE_kmod-shortcut-fe-cm is not set" >> .config
           make defconfig
@@ -74,17 +55,4 @@ jobs:
           sed -i 's/CONFIG_PACKAGE_kmod-shortcut-fe-cm=y/# CONFIG_PACKAGE_kmod-shortcut-fe-cm is not set/g' .config
 
       - name: Compile firmware
-        run: make -j2 V=s
-
-      - name: Print firmware MD5
-        run: |
-          cd bin/targets/qualcommax/ipq807x/
-          md5sum openwrt-qualcommax-ipq807x-xiaomi_ax3600-bigpart-*.ubi
-
-      - name: Upload firmware
-        uses: actions/upload-artifact@v4
-        with:
-          name: AX3600-Gaojianli-bigpart-nss
-          path: |
-            bin/targets/qualcommax/ipq807x/openwrt-qualcommax-ipq807x-xiaomi_ax3600-bigpart-squashfs-sysupgrade.bin
-            bin/targets/qualcommax/ipq807x/openwrt-qualcommax-ipq807x-xiaomi_ax3600-bigpart-squashfs-factory.ubi
+        run: make -j1 V=s
