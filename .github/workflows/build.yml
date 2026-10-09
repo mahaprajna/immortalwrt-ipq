@@ -12,8 +12,8 @@ jobs:
         with:
           repository: Gaojianli/immortalwrt-ipq
           ref: main-nss
+          fetch-depth: 0
           submodules: true
-          depth: 1
 
       - name: Pull git submodules
         run: git submodule update --init --recursive
@@ -39,20 +39,17 @@ jobs:
 
       - name: Generate .config
         run: |
-          # 目标平台（高渐离 main-nss 分支，AX3600 大分区）
           echo "CONFIG_TARGET_qualcommax=y" > .config
           echo "CONFIG_TARGET_qualcommax_ipq807x=y" >> .config
           echo "CONFIG_TARGET_MULTI_PROFILE=y" >> .config
           echo "CONFIG_TARGET_qualcommax_ipq807x_DEVICE_xiaomi_ax3600=y" >> .config
 
-          # NSS 驱动（仓库原生内置）
           echo "CONFIG_PACKAGE_kmod-qca-nss-drv=y" >> .config
           echo "CONFIG_PACKAGE_kmod-qca-nss-ecm=y" >> .config
           echo "CONFIG_PACKAGE_kmod-qca-nss-dp=y" >> .config
           echo "CONFIG_PACKAGE_kmod-qca-nss-clients=y" >> .config
           echo "CONFIG_PACKAGE_nss-firmware-ipq807x=y" >> .config
 
-          # LuCI 基础 + iStore 商店
           echo "CONFIG_PACKAGE_luci=y" >> .config
           echo "CONFIG_PACKAGE_luci-base=y" >> .config
           echo "CONFIG_PACKAGE_luci-admin-full=y" >> .config
@@ -66,19 +63,16 @@ jobs:
           echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
           echo "CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y" >> .config
 
-          # NSS 管理界面（监控 + 加速控制）
           echo "CONFIG_PACKAGE_luci-app-nss=y" >> .config
           echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
           echo "CONFIG_PACKAGE_kmod-turboacc=y" >> .config
 
-          # 基础系统组件 & WiFi 认证依赖
           echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
           echo "CONFIG_PACKAGE_dropbear=y" >> .config
           echo "CONFIG_PACKAGE_firewall4=y" >> .config
           echo "CONFIG_PACKAGE_htop=y" >> .config
           echo "CONFIG_PACKAGE_wpad-openssl=y" >> .config
 
-          # 禁用 ath10k / ath11k，避免与 NSS WiFi 冲突
           echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
           echo "# CONFIG_PACKAGE_ath10k-firmware-qca9887 is not set" >> .config
           echo "# CONFIG_PACKAGE_ath10k-firmware-qca99x0 is not set" >> .config
@@ -88,7 +82,6 @@ jobs:
 
           make defconfig
 
-          # ===== 二次强制覆写关键配置，防止 defconfig 自动降级为 m =====
           for opt in \
             CONFIG_PACKAGE_kmod-qca-nss-drv \
             CONFIG_PACKAGE_kmod-qca-nss-ecm \
