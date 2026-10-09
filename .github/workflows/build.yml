@@ -10,6 +10,7 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
         with:
+          repository: Gaojianli/immortalwrt-ipq
           ref: main-nss
           fetch-depth: 0
           submodules: true
