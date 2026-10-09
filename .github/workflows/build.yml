@@ -7,11 +7,10 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: Checkout Gaojianli source
+      - name: Checkout source
         uses: actions/checkout@v4
         with:
-          repository: Gaojianli/immortalwrt-ipq
-          ref: main-nss
+          ref: main          # 改成你仓库中实际的分支名
           fetch-depth: 0
           submodules: true
 
