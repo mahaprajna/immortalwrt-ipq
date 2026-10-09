@@ -10,11 +10,10 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
         with:
-          repository: Gaojianli/immortalwrt-ipq
-          ref: main-nss
+          ref: master
           fetch-depth: 0
           submodules: true
-
+          
       - name: Pull git submodules
         run: git submodule update --init --recursive
 
