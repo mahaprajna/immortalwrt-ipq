@@ -13,7 +13,7 @@ jobs:
           ref: master
           fetch-depth: 0
           submodules: true
-          
+
       - name: Pull git submodules
         run: git submodule update --init --recursive
 
