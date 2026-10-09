@@ -1,6 +1,17 @@
-      - name: Checkout source
+name: Build Gaojianli ImmortalWrt-NSS for AX3600
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout Gaojianli source
         uses: actions/checkout@v4
         with:
+          repository: Gaojianli/immortalwrt-ipq
+          ref: main-nss
           submodules: true
           depth: 1
 
@@ -10,49 +21,124 @@
       - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev python3 python3-pip python3-setuptools python3-dev rsync unzip wget zlib1g-dev
+          sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev python3 python3-pip python3-setuptools python3-dev rsync unzip wget
 
-      - name: Update feeds
+      - name: List available AX3600 devices
         run: |
+          echo "=== all AX3600 related devices ==="
+          grep -rE "define Device/.*ax3600" target/linux/ || true
+          echo "=== qualcommax image mk files ==="
+          find target/linux/qualcommax -name "*.mk" || true
+
+      - name: Update feeds (with iStore feed, avoid duplicate feed)
+        run: |
+          sed -i '/src-git istore/d' feeds.conf.default
+          echo 'src-git istore https://github.com/linkease/istore;main' >> feeds.conf.default
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
       - name: Generate .config
         run: |
+          # 目标平台（高渐离 main-nss 分支，AX3600 大分区）
           echo "CONFIG_TARGET_qualcommax=y" > .config
           echo "CONFIG_TARGET_qualcommax_ipq807x=y" >> .config
           echo "CONFIG_TARGET_MULTI_PROFILE=y" >> .config
-          echo "CONFIG_TARGET_DEVICE_qualcommax_ipq807x_xiaomi_ax3600-bigpart=y" >> .config
-          
-          # 只保留基础包，删掉VIKINGYFY那一堆NSS私有CONFIG！
+          echo "CONFIG_TARGET_qualcommax_ipq807x_DEVICE_xiaomi_ax3600=y" >> .config
+
+          # NSS 驱动（仓库原生内置）
           echo "CONFIG_PACKAGE_kmod-qca-nss-drv=y" >> .config
           echo "CONFIG_PACKAGE_kmod-qca-nss-ecm=y" >> .config
           echo "CONFIG_PACKAGE_kmod-qca-nss-dp=y" >> .config
           echo "CONFIG_PACKAGE_kmod-qca-nss-clients=y" >> .config
           echo "CONFIG_PACKAGE_nss-firmware-ipq807x=y" >> .config
-          
-          echo "CONFIG_PACKAGE_kmod-ath11k=y" >> .config
-          echo "CONFIG_PACKAGE_wpad-full=y" >> .config
-          echo "CONFIG_PACKAGE_ipq-wifi-xiaomi_ax3600=m" >> .config
-          
+
+          # LuCI 基础 + iStore 商店
           echo "CONFIG_PACKAGE_luci=y" >> .config
           echo "CONFIG_PACKAGE_luci-base=y" >> .config
-          echo "CONFIG_PACKAGE_luci-mod-admin-full=y" >> .config
+          echo "CONFIG_PACKAGE_luci-admin-full=y" >> .config
           echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
           echo "CONFIG_PACKAGE_luci-app-firewall=y" >> .config
+          echo "CONFIG_PACKAGE_luci-compat=y" >> .config
+          echo "CONFIG_PACKAGE_luci-lib-taskd=y" >> .config
+          echo "CONFIG_PACKAGE_luci-lib-xterm=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-store=y" >> .config
+          echo "CONFIG_PACKAGE_istore=y" >> .config
           echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
           echo "CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y" >> .config
-          
+
+          # NSS 管理界面（监控 + 加速控制）
+          echo "CONFIG_PACKAGE_luci-app-nss=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-turboacc=y" >> .config
+
+          # 基础系统组件 & WiFi 认证依赖
           echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
           echo "CONFIG_PACKAGE_dropbear=y" >> .config
           echo "CONFIG_PACKAGE_firewall4=y" >> .config
           echo "CONFIG_PACKAGE_htop=y" >> .config
-          
-          echo "# CONFIG_PACKAGE_kmod-shortcut-fe is not set" >> .config
-          echo "# CONFIG_PACKAGE_kmod-shortcut-fe-cm is not set" >> .config
+          echo "CONFIG_PACKAGE_wpad-openssl=y" >> .config
+
+          # 禁用 ath10k / ath11k，避免与 NSS WiFi 冲突
+          echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
+          echo "# CONFIG_PACKAGE_ath10k-firmware-qca9887 is not set" >> .config
+          echo "# CONFIG_PACKAGE_ath10k-firmware-qca99x0 is not set" >> .config
+          echo "# CONFIG_PACKAGE_kmod-ath11k is not set" >> .config
+          echo "# CONFIG_PACKAGE_kmod-ath11k-ahb is not set" >> .config
+          echo "# CONFIG_PACKAGE_ath11k-firmware-ipq8074 is not set" >> .config
+
           make defconfig
-          sed -i 's/CONFIG_PACKAGE_kmod-shortcut-fe=y/# CONFIG_PACKAGE_kmod-shortcut-fe is not set/g' .config
-          sed -i 's/CONFIG_PACKAGE_kmod-shortcut-fe-cm=y/# CONFIG_PACKAGE_kmod-shortcut-fe-cm is not set/g' .config
+
+          # ===== 二次强制覆写关键配置，防止 defconfig 自动降级为 m =====
+          for opt in \
+            CONFIG_PACKAGE_kmod-qca-nss-drv \
+            CONFIG_PACKAGE_kmod-qca-nss-ecm \
+            CONFIG_PACKAGE_kmod-qca-nss-dp \
+            CONFIG_PACKAGE_kmod-qca-nss-clients \
+            CONFIG_PACKAGE_nss-firmware-ipq807x \
+            CONFIG_PACKAGE_kmod-turboacc \
+            CONFIG_PACKAGE_luci-app-nss \
+            CONFIG_PACKAGE_luci-app-turboacc \
+            CONFIG_PACKAGE_wpad-openssl \
+            CONFIG_PACKAGE_luci-i18n-base-zh-cn \
+            CONFIG_PACKAGE_luci-i18n-firewall-zh-cn ; do
+            sed -i "/^# $opt is not set/d" .config
+            if grep -q "^$opt=" .config; then
+              sed -i "s/^$opt=.*/$opt=y/" .config
+            else
+              echo "$opt=y" >> .config
+            fi
+          done
+
+      - name: Verify config
+        run: |
+          echo "=== Target device ==="
+          grep -E "CONFIG_TARGET_qualcommax_ipq807x_DEVICE" .config || true
+          echo "=== Profile ==="
+          grep -E "CONFIG_TARGET_PROFILE" .config || true
+          echo "=== ath conflicts (should be empty) ==="
+          grep -E "CONFIG_PACKAGE_kmod-ath1[01]k=y" .config || true
+          echo "=== NSS packages ==="
+          grep -E "CONFIG_PACKAGE_(kmod-qca-nss|nss-firmware)" .config || true
+          echo "=== wpad-openssl ==="
+          grep "CONFIG_PACKAGE_wpad-openssl" .config || true
+          echo "=== NSS LuCI apps & turboacc kernel module ==="
+          grep -E "CONFIG_PACKAGE_(luci-app-(nss|turboacc)|kmod-turboacc)" .config || true
+          echo "=== 关键 i18n 包 ==="
+          grep -E "CONFIG_PACKAGE_luci-i18n-(base|firewall)-zh-cn" .config || true
 
       - name: Compile firmware
-        run: make -j1 V=s
+        run: make -j$(nproc) V=s || make -j1 V=s
+
+      - name: Generate MD5 checksum
+        run: |
+          cd bin/targets/qualcommax/ipq807x
+          md5sum *.bin > md5sums.txt
+          echo "==== MD5 Checksum ===="
+          cat md5sums.txt
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ImmortalWrt-AX3600-Bigpart-NSS
+          path: bin/targets/qualcommax/ipq807x/
+          if-no-files-found: error
