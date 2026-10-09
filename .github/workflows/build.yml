@@ -39,6 +39,15 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
+      - name: Check wpad variants availability
+        run: |
+          echo "=== 所有 wpad 变体 ==="
+          find package -name "Makefile" | xargs grep -l "wpad" 2>/dev/null | head -20
+          echo "=== wpad-basic-openssl 是否存在 ==="
+          grep -rE "wpad-basic-openssl" package/network/services/ 2>/dev/null | head -5 || echo "NOT FOUND"
+          echo "=== wpad-basic-mbedtls 是否存在 ==="
+          grep -rE "wpad-basic-mbedtls" package/network/services/ 2>/dev/null | head -5 || echo "NOT FOUND"
+
       - name: Generate .config
         run: |
           echo "CONFIG_TARGET_qualcommax=y" > .config
@@ -46,14 +55,14 @@ jobs:
           echo "CONFIG_TARGET_MULTI_PROFILE=y" >> .config
           echo "CONFIG_TARGET_qualcommax_ipq807x_DEVICE_xiaomi_ax3600=y" >> .config
 
-          # NSS基础驱动
+          # NSS基础驱动 + ECM（预留VLAN多网段能力）
           echo "CONFIG_PACKAGE_kmod-qca-nss-drv=y" >> .config
           echo "CONFIG_PACKAGE_kmod-qca-nss-ecm=y" >> .config
           echo "CONFIG_PACKAGE_kmod-qca-nss-dp=y" >> .config
           echo "CONFIG_PACKAGE_kmod-qca-nss-clients=y" >> .config
           echo "CONFIG_PACKAGE_nss-firmware-ipq807x=y" >> .config
 
-          # LuCI & iStore
+          # LuCI & iStore 中文
           echo "CONFIG_PACKAGE_luci=y" >> .config
           echo "CONFIG_PACKAGE_luci-base=y" >> .config
           echo "CONFIG_PACKAGE_luci-admin-full=y" >> .config
@@ -76,97 +85,76 @@ jobs:
           echo "CONFIG_PACKAGE_firewall4=y" >> .config
           echo "CONFIG_PACKAGE_htop=y" >> .config
 
-          # 【核心修复1】启用 Wi-Fi 6 基础支持，解决 he_mu_edca 报错
-          echo "CONFIG_DRIVER_11AX_SUPPORT=y" >> .config
-
-          # hostapd/wpa 独立包，关闭 HE_UCA
-          echo "CONFIG_PACKAGE_hostapd-openssl=y" >> .config
-          echo "CONFIG_PACKAGE_wpa-supplicant-openssl=y" >> .config
-          echo "CONFIG_PACKAGE_hostapd-common=y" >> .config
-          echo "# CONFIG_HOSTAPD_HE_UCA is not set" >> .config
-          echo "# CONFIG_WPA_SUPPLICANT_HE_UCA is not set" >> .config
-
-          # 【核心修复2】显式禁用所有 wpad 变体，防止自动选中 wpad-full-openssl
+          # 无线关键配置：使用 wpad‑basic‑openssl，规避 he_uca 编译报错
+          echo "CONFIG_PACKAGE_wpad-basic-openssl=y" >> .config
           echo "# CONFIG_PACKAGE_wpad-openssl is not set" >> .config
           echo "# CONFIG_PACKAGE_wpad-full-openssl is not set" >> .config
-          echo "# CONFIG_PACKAGE_wpad-basic-mbedtls is not set" >> .config
-          echo "# CONFIG_PACKAGE_hostapd-full is not set" >> .config
+          echo "# CONFIG_PACKAGE_hostapd-openssl is not set" >> .config
+          echo "# CONFIG_PACKAGE_wpa-supplicant-openssl is not set" >> .config
+          echo "# CONFIG_HOSTAPD_HE_UCA is not set" >> .config
+          echo "# CONFIG_WPA_SUPPLICANT_HE_UCA is not set" >> .config
+          echo "CONFIG_DRIVER_11AX_SUPPORT=y" >> .config
 
-          # ath11k + BDF 包
+          # ath11k + Gaojianli AX3600专属射频BDF
           echo "CONFIG_PACKAGE_kmod-ath11k=y" >> .config
           echo "CONFIG_PACKAGE_kmod-ath11k-ahb=y" >> .config
           echo "CONFIG_PACKAGE_ath11k-firmware-ipq8074=y" >> .config
           echo "CONFIG_PACKAGE_ipq-wifi-xiaomi-ax3600=y" >> .config
 
-          # 禁用旧 ath10k
+          # 禁用老旧ath10k驱动
           echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
           echo "# CONFIG_PACKAGE_ath10k-firmware-qca9887 is not set" >> .config
           echo "# CONFIG_PACKAGE_ath10k-firmware-qca99x0 is not set" >> .config
 
           make defconfig
 
-      - name: Force override critical configs (robust)
+      - name: Post‑fix compile macros（强制锁定wpad配置，修复HE_UCA）
         run: |
-          # 1. 确保 HE_UCA 被禁用 (兼容各种可能出现的格式)
-          sed -i 's/^CONFIG_HE_UCA=y/# CONFIG_HE_UCA is not set/' .config
           sed -i 's/^CONFIG_HOSTAPD_HE_UCA=y/# CONFIG_HOSTAPD_HE_UCA is not set/' .config
           sed -i 's/^CONFIG_WPA_SUPPLICANT_HE_UCA=y/# CONFIG_WPA_SUPPLICANT_HE_UCA is not set/' .config
-          
-          # 2. 确保禁用 wpad-full-openssl：先删除任何已存在行，再追加注释行，避免重复
-          sed -i '/^CONFIG_PACKAGE_wpad-full-openssl/d' .config
-          sed -i '/^# CONFIG_PACKAGE_wpad-full-openssl is not set/d' .config
-          echo "# CONFIG_PACKAGE_wpad-full-openssl is not set" >> .config
-          
-          # 3. 确保 Wi-Fi 6 基础支持被开启：清掉旧行，强制追加=y
           sed -i '/^# CONFIG_DRIVER_11AX_SUPPORT is not set/d' .config
           sed -i '/^CONFIG_DRIVER_11AX_SUPPORT=/d' .config
           echo "CONFIG_DRIVER_11AX_SUPPORT=y" >> .config
-          
-          # 4. 二次强制覆写关键包，防止被 defconfig 降级为 m
-          for opt in \
-            CONFIG_PACKAGE_kmod-qca-nss-drv \
-            CONFIG_PACKAGE_kmod-qca-nss-ecm \
-            CONFIG_PACKAGE_kmod-qca-nss-dp \
-            CONFIG_PACKAGE_kmod-qca-nss-clients \
-            CONFIG_PACKAGE_nss-firmware-ipq807x \
-            CONFIG_PACKAGE_kmod-turboacc \
-            CONFIG_PACKAGE_luci-app-nss \
-            CONFIG_PACKAGE_luci-app-turboacc \
-            CONFIG_PACKAGE_hostapd-common \
-            CONFIG_PACKAGE_hostapd-openssl \
-            CONFIG_PACKAGE_wpa-supplicant-openssl \
-            CONFIG_PACKAGE_kmod-ath11k \
-            CONFIG_PACKAGE_kmod-ath11k-ahb \
-            CONFIG_PACKAGE_ath11k-firmware-ipq8074 \
-            CONFIG_PACKAGE_ipq-wifi-xiaomi-ax3600 \
-            CONFIG_PACKAGE_luci-i18n-base-zh-cn \
-            CONFIG_PACKAGE_luci-i18n-firewall-zh-cn ; do
-            sed -i "/^# $opt is not set/d" .config
-            if grep -q "^$opt=" .config; then
-              sed -i "s/^$opt=.*/$opt=y/" .config
-            else
-              echo "$opt=y" >> .config
-            fi
-          done
+
+          # ========== 二次强制锁定 wpad-basic-openssl=y ==========
+          sed -i '/^# CONFIG_PACKAGE_wpad-basic-openssl is not set/d' .config
+          if grep -q "^CONFIG_PACKAGE_wpad-basic-openssl=" .config; then
+            sed -i "s/^CONFIG_PACKAGE_wpad-basic-openssl=.*/CONFIG_PACKAGE_wpad-basic-openssl=y/" .config
+          else
+            echo "CONFIG_PACKAGE_wpad-basic-openssl=y" >> .config
+          fi
+
+          # ========== 强制删除、禁止 wpad-full-openssl ==========
+          sed -i '/^CONFIG_PACKAGE_wpad-full-openssl=/d' .config
+          sed -i '/^# CONFIG_PACKAGE_wpad-full-openssl is not set/d' .config
+          echo "# CONFIG_PACKAGE_wpad-full-openssl is not set" >> .config
 
       - name: Verify config
         run: |
-          echo "=== 设备 ==="
+          echo "=== Target device ==="
           grep -E "CONFIG_TARGET_qualcommax_ipq807x_DEVICE" .config || true
-          echo "=== Wi-Fi 6 基础支持（必须为y） ==="
+          echo "=== Wi‑Fi6 DRIVER_11AX_SUPPORT ==="
           grep "CONFIG_DRIVER_11AX_SUPPORT" .config || true
-          echo "=== HE UCA (不能出现=y) ==="
-          grep -E "CONFIG_(HE_UCA|HOSTAPD_HE_UCA|WPA_SUPPLICANT_HE_UCA)=y" .config || true
-          echo "=== wpad 变体（全部为 not set） ==="
+          echo "=== HE_UCA 检查，不能出现=y ==="
+          grep -E "CONFIG_(HOSTAPD|WPA_SUPPLICANT)_HE_UCA=y" .config || true
+          echo "=== wpad 变体清单（应只出现 wpad-basic-openssl=y，其余全是 not set） ==="
           grep -E "CONFIG_PACKAGE_wpad" .config || true
-          echo "=== hostapd 组件 ==="
-          grep -E "CONFIG_PACKAGE_hostapd" .config || true
-          echo "=== NSS packages ==="
+          echo "=== NSS modules ==="
           grep -E "CONFIG_PACKAGE_(kmod-qca-nss|nss-firmware)" .config || true
-          echo "=== ath11k 驱动 ==="
-          grep -E "CONFIG_PACKAGE_kmod-ath11k" .config || true
-          echo "=== NSS LuCI & turboacc ==="
-          grep -E "CONFIG_PACKAGE_(luci-app-(nss|turboacc)|kmod-turboacc)" .config || true
+          echo "=== ath11k & ax3600 BDF ==="
+          grep -E "CONFIG_PACKAGE_kmod-ath11k|ipq-wifi-xiaomi-ax3600" .config || true
+
+          # 危险包检测，一旦选中wpad-full-openssl直接终止构建
+          echo "=== wpad-full-openssl 必须为空 ==="
+          if grep -q "CONFIG_PACKAGE_wpad-full-openssl=y" .config; then
+            echo "ERROR: wpad-full-openssl=y 被选中！会触发HE_UCA编译报错，终止构建！"
+            exit 1
+          fi
+          echo "=== wpad-basic-openssl 必须为 y ==="
+          if ! grep -q "CONFIG_PACKAGE_wpad-basic-openssl=y" .config; then
+            echo "ERROR: wpad-basic-openssl 没有被选中！终止构建！"
+            exit 1
+          fi
 
       - name: Compile firmware
         run: make -j1 V=s
