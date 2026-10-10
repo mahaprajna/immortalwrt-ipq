@@ -90,28 +90,34 @@ jobs:
 
       - name: First compile attempt (expected to fail at hostapd)
         run: |
-          echo "=== 第一次编译，预期 hostapd 报错，完成源码解压 ==="
-          make -j1 V=s || echo ">>>>>>第一次编译失败，属于预期行为，继续执行补丁<<<<<<"
-          
-          echo "=== 列出已解压 hostapd.c 文件 ==="
-          find build_dir -name "hostapd.c" | head -10
+          echo "=== 第一次编译，预期在 hostapd 处失败，目的是让源码解压到位 ==="
+          make -j1 V=s || echo "第一次编译在 hostapd 处失败，符合预期，继续打补丁"
 
       - name: Patch hostapd after source extraction
         run: |
-          echo "=== 修复 he_mu_edca 编译错误 ==="
+          echo "=== build_dir内找到的hostapd.c列表 ==="
+          find build_dir -name "hostapd.c"
+          COUNT=$(find build_dir -name "hostapd.c" | wc -l)
+          echo "总共找到 $COUNT 个hostapd.c"
+          if [ $COUNT -eq 0 ];then
+            echo "❌ 警告：源码尚未解压，补丁无法执行！终止构建"
+            exit 1
+          fi
+
+          echo "=== 对已解压的所有 hostapd.c 打补丁，注释掉 he_mu_edca 行 ==="
           find build_dir -name "hostapd.c" | while read file; do
             if grep -q "he_mu_edca" "$file"; then
-              echo "正在修复文件: $file"
+              echo "正在修复: $file"
               sed -i 's/.*he_mu_edca.*/\/\/ &/' "$file"
-              grep "he_mu_edca" "$file" || echo "✅ $file 注释完成"
+              grep "he_mu_edca" "$file" || echo "✅ $file 已修复"
             else
-              echo "跳过: $file"
+              echo "无需修复: $file"
             fi
           done
 
       - name: Second compile (final build)
         run: |
-          echo "=== 第二次编译，直接编译已修改源码 ==="
+          echo "=== 第二次编译，源码已打补丁 ==="
           make -j1 V=s
 
       - name: Generate MD5 checksum
