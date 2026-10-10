@@ -65,8 +65,10 @@ jobs:
           echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
           echo "CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y" >> .config
           echo "CONFIG_PACKAGE_luci-app-nss=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-          echo "CONFIG_PACKAGE_kmod-turboacc=y" >> .config
+
+          # wpad-basic 替换独立hostapd，规避编译冲突
+          echo "CONFIG_PACKAGE_wpad-basic=y" >> .config
+          echo "# CONFIG_PACKAGE_hostapd is not set" >> .config
 
           # 基础包
           echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
@@ -83,6 +85,14 @@ jobs:
           echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
 
           make defconfig
+
+          # ===== 核心修复：强制写入 AX3600 大分区 NAND 的 UBI 参数 =====
+          echo 'CONFIG_TARGET_ROOTFS_UBIFS_OPTS="-m 2048 -e 126976 -c 4096"' >> .config
+          echo 'CONFIG_TARGET_ROOTFS_UBI_OPTS="-m 2048 -p 128KiB"' >> .config
+          
+          # 输出校验UBI配置，方便看日志确认是否写入成功
+          echo "===== UBI参数校验 ====="
+          grep "CONFIG_TARGET_ROOTFS_UBI" .config
 
       - name: First compile attempt (expected to fail at hostapd)
         run: |
