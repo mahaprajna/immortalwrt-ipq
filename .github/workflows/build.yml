@@ -27,10 +27,8 @@ jobs:
           sudo apt update
           sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev python3 python3-pip python3-setuptools python3-dev rsync unzip wget
 
-      - name: List available AX3600 devices
-        run: |
-          echo "=== all AX3600 related devices ==="
-          grep -rE "define Device/.*ax3600" target/linux/ || true
+      - name: List AX3600 devices
+        run: grep -rE "define Device/.*ax3600" target/linux/ || true
 
       - name: Update feeds
         run: |
@@ -39,30 +37,42 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Check wpad variants availability
+      - name: Detect available wpad-basic variant
+        id: wpad_detect
         run: |
-          echo "=== 所有 wpad 变体 ==="
-          find package -name "Makefile" | xargs grep -l "wpad" 2>/dev/null | head -20
-          echo "=== wpad-basic-openssl 是否存在 ==="
-          grep -rE "wpad-basic-openssl" package/network/services/ 2>/dev/null | head -5 || echo "NOT FOUND"
-          echo "=== wpad-basic-mbedtls 是否存在 ==="
-          grep -rE "wpad-basic-mbedtls" package/network/services/ 2>/dev/null | head -5 || echo "NOT FOUND"
+          echo "=== 检测可用的 wpad-basic 变体 ==="
+          for pkg in wpad-basic wpad-basic-openssl wpad-basic-mbedtls wpad-basic-wolfssl; do
+            if grep -rE "PKG_NAME:=${pkg}$" package/network/services/ 2>/dev/null | head -1; then
+              echo "FOUND: $pkg"
+              echo "WPAD_PKG=$pkg" >> $GITHUB_ENV
+              echo "detected=$pkg" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          done
+          echo "ERROR: 未找到任何 wpad-basic 变体，继续编译会触发 he_mu_edca 报错！终止。"
+          exit 1
 
       - name: Generate .config
         run: |
+          if [ -z "$WPAD_PKG" ]; then
+            echo "ERROR: WPAD_PKG 为空，检测步骤可能失败"
+            exit 1
+          fi
+          echo "本次使用的 wpad 变体: $WPAD_PKG"
+
           echo "CONFIG_TARGET_qualcommax=y" > .config
           echo "CONFIG_TARGET_qualcommax_ipq807x=y" >> .config
           echo "CONFIG_TARGET_MULTI_PROFILE=y" >> .config
           echo "CONFIG_TARGET_qualcommax_ipq807x_DEVICE_xiaomi_ax3600=y" >> .config
 
-          # NSS基础驱动 + ECM（预留VLAN多网段能力）
+          # NSS + ECM
           echo "CONFIG_PACKAGE_kmod-qca-nss-drv=y" >> .config
           echo "CONFIG_PACKAGE_kmod-qca-nss-ecm=y" >> .config
           echo "CONFIG_PACKAGE_kmod-qca-nss-dp=y" >> .config
           echo "CONFIG_PACKAGE_kmod-qca-nss-clients=y" >> .config
           echo "CONFIG_PACKAGE_nss-firmware-ipq807x=y" >> .config
 
-          # LuCI & iStore 中文
+          # LuCI & iStore
           echo "CONFIG_PACKAGE_luci=y" >> .config
           echo "CONFIG_PACKAGE_luci-base=y" >> .config
           echo "CONFIG_PACKAGE_luci-admin-full=y" >> .config
@@ -79,80 +89,64 @@ jobs:
           echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
           echo "CONFIG_PACKAGE_kmod-turboacc=y" >> .config
 
-          # 基础系统包
+          # 基础包
           echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
           echo "CONFIG_PACKAGE_dropbear=y" >> .config
           echo "CONFIG_PACKAGE_firewall4=y" >> .config
           echo "CONFIG_PACKAGE_htop=y" >> .config
 
-          # 无线关键配置：使用 wpad‑basic‑openssl，规避 he_uca 编译报错
-          echo "CONFIG_PACKAGE_wpad-basic-openssl=y" >> .config
-          echo "# CONFIG_PACKAGE_wpad-openssl is not set" >> .config
-          echo "# CONFIG_PACKAGE_wpad-full-openssl is not set" >> .config
+          # 无线，动态选中wpad-basic，禁用其余wpad变体
+          echo "CONFIG_PACKAGE_${WPAD_PKG}=y" >> .config
+          for pkg in wpad-basic wpad-basic-openssl wpad-basic-mbedtls wpad-basic-wolfssl wpad-openssl wpad-full-openssl; do
+            if [ "$pkg" != "$WPAD_PKG" ]; then
+              echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
+            fi
+          done
           echo "# CONFIG_PACKAGE_hostapd-openssl is not set" >> .config
+          echo "# CONFIG_PACKAGE_hostapd-full is not set" >> .config
           echo "# CONFIG_PACKAGE_wpa-supplicant-openssl is not set" >> .config
-          echo "# CONFIG_HOSTAPD_HE_UCA is not set" >> .config
-          echo "# CONFIG_WPA_SUPPLICANT_HE_UCA is not set" >> .config
+
+          # WiFi6 11AX支持
           echo "CONFIG_DRIVER_11AX_SUPPORT=y" >> .config
 
-          # ath11k + Gaojianli AX3600专属射频BDF
+          # ath11k无线驱动
           echo "CONFIG_PACKAGE_kmod-ath11k=y" >> .config
           echo "CONFIG_PACKAGE_kmod-ath11k-ahb=y" >> .config
           echo "CONFIG_PACKAGE_ath11k-firmware-ipq8074=y" >> .config
           echo "CONFIG_PACKAGE_ipq-wifi-xiaomi-ax3600=y" >> .config
-
-          # 禁用老旧ath10k驱动
           echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
-          echo "# CONFIG_PACKAGE_ath10k-firmware-qca9887 is not set" >> .config
-          echo "# CONFIG_PACKAGE_ath10k-firmware-qca99x0 is not set" >> .config
 
           make defconfig
 
-      - name: Post‑fix compile macros（强制锁定wpad配置，修复HE_UCA）
+      - name: Post-fix
         run: |
-          sed -i 's/^CONFIG_HOSTAPD_HE_UCA=y/# CONFIG_HOSTAPD_HE_UCA is not set/' .config
-          sed -i 's/^CONFIG_WPA_SUPPLICANT_HE_UCA=y/# CONFIG_WPA_SUPPLICANT_HE_UCA is not set/' .config
-          sed -i '/^# CONFIG_DRIVER_11AX_SUPPORT is not set/d' .config
+          sed -i '/CONFIG_PACKAGE_wpad-full/d' .config
+          sed -i '/CONFIG_PACKAGE_hostapd-full/d' .config
+
+          sed -i "/^CONFIG_PACKAGE_${WPAD_PKG}=/d" .config
+          echo "CONFIG_PACKAGE_${WPAD_PKG}=y" >> .config
+          for pkg in wpad-basic wpad-basic-openssl wpad-basic-mbedtls wpad-basic-wolfssl wpad-openssl wpad-full-openssl; do
+            if [ "$pkg" != "$WPAD_PKG" ]; then
+              sed -i "/^CONFIG_PACKAGE_${pkg}=/d" .config
+              sed -i "/^# CONFIG_PACKAGE_${pkg} is not set/d" .config
+              echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
+            fi
+          done
+
           sed -i '/^CONFIG_DRIVER_11AX_SUPPORT=/d' .config
           echo "CONFIG_DRIVER_11AX_SUPPORT=y" >> .config
 
-          # ========== 二次强制锁定 wpad-basic-openssl=y ==========
-          sed -i '/^# CONFIG_PACKAGE_wpad-basic-openssl is not set/d' .config
-          if grep -q "^CONFIG_PACKAGE_wpad-basic-openssl=" .config; then
-            sed -i "s/^CONFIG_PACKAGE_wpad-basic-openssl=.*/CONFIG_PACKAGE_wpad-basic-openssl=y/" .config
-          else
-            echo "CONFIG_PACKAGE_wpad-basic-openssl=y" >> .config
-          fi
-
-          # ========== 强制删除、禁止 wpad-full-openssl ==========
-          sed -i '/^CONFIG_PACKAGE_wpad-full-openssl=/d' .config
-          sed -i '/^# CONFIG_PACKAGE_wpad-full-openssl is not set/d' .config
-          echo "# CONFIG_PACKAGE_wpad-full-openssl is not set" >> .config
-
       - name: Verify config
         run: |
-          echo "=== Target device ==="
+          echo "=== Device ==="
           grep -E "CONFIG_TARGET_qualcommax_ipq807x_DEVICE" .config || true
-          echo "=== Wi‑Fi6 DRIVER_11AX_SUPPORT ==="
+          echo "=== 11AX ==="
           grep "CONFIG_DRIVER_11AX_SUPPORT" .config || true
-          echo "=== HE_UCA 检查，不能出现=y ==="
-          grep -E "CONFIG_(HOSTAPD|WPA_SUPPLICANT)_HE_UCA=y" .config || true
-          echo "=== wpad 变体清单（应只出现 wpad-basic-openssl=y，其余全是 not set） ==="
-          grep -E "CONFIG_PACKAGE_wpad" .config || true
-          echo "=== NSS modules ==="
-          grep -E "CONFIG_PACKAGE_(kmod-qca-nss|nss-firmware)" .config || true
-          echo "=== ath11k & ax3600 BDF ==="
-          grep -E "CONFIG_PACKAGE_kmod-ath11k|ipq-wifi-xiaomi-ax3600" .config || true
+          echo "=== wpad 选择 ==="
+          grep -E "CONFIG_PACKAGE_wpad|CONFIG_PACKAGE_hostapd" .config || true
 
-          # 危险包检测，一旦选中wpad-full-openssl直接终止构建
-          echo "=== wpad-full-openssl 必须为空 ==="
-          if grep -q "CONFIG_PACKAGE_wpad-full-openssl=y" .config; then
-            echo "ERROR: wpad-full-openssl=y 被选中！会触发HE_UCA编译报错，终止构建！"
-            exit 1
-          fi
-          echo "=== wpad-basic-openssl 必须为 y ==="
-          if ! grep -q "CONFIG_PACKAGE_wpad-basic-openssl=y" .config; then
-            echo "ERROR: wpad-basic-openssl 没有被选中！终止构建！"
+          if grep -qE "CONFIG_PACKAGE_wpad-full|CONFIG_PACKAGE_hostapd-full|CONFIG_PACKAGE_hostapd-openssl" .config; then
+            echo "ERROR: 危险包被选中，会触发 hostapd 编译报错！"
             exit 1
           fi
 
@@ -163,7 +157,6 @@ jobs:
         run: |
           cd bin/targets/qualcommax/ipq807x
           md5sum *.bin > md5sums.txt
-          echo "==== MD5 Checksum ===="
           cat md5sums.txt
 
       - name: Upload Artifact
