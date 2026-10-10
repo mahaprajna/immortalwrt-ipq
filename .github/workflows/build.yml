@@ -1,4 +1,5 @@
 name: Build Gaojianli ImmortalWrt-NSS for AX3600
+
 on:
   workflow_dispatch:
 
@@ -85,36 +86,28 @@ jobs:
           echo "CONFIG_PACKAGE_ipq-wifi-xiaomi-ax3600=y" >> .config
           echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
 
+          # 执行 defconfig 让构建系统补齐依赖（此时会自动选中 wpad-full-openssl）
           make defconfig
 
-      - name: Prepare wpad source（解压wpad-full源码）
+      - name: Compile firmware
         run: |
+          echo "=== 1. 提前解压 hostapd + wpad 源码 ==="
+          make package/network/services/hostapd/prepare V=s 2>&1 | tail -10
           make package/network/services/wpad/prepare V=s 2>&1 | tail -10
 
-      - name: Pre-Compile Patch hostapd.c 注释he_mu_edca
-        run: |
-          echo "=== 开始 hostapd he_mu_edca 补丁 ==="
+          echo "=== 2. 编译前最终补丁：暴力注释 hostapd.c 中的 he_mu_edca ==="
           find build_dir -name "hostapd.c" | while read file; do
             if grep -q "he_mu_edca" "$file"; then
               echo "正在修复: $file"
               sed -i 's/.*he_mu_edca.*/\/\/ &/' "$file"
-              echo "修复后检查:"
               grep "he_mu_edca" "$file" || echo "✅ $file he_mu_edca 已注释"
             else
               echo "无需修复: $file"
             fi
           done
-          echo "=== hostapd补丁完成 ==="
-
-      - name: Verify config
-        run: |
-          echo "=== Target Device ==="
-          grep -E "CONFIG_TARGET_qualcommax_ipq807x_DEVICE" .config || true
-          echo "=== wpad package ==="
-          grep -E "CONFIG_PACKAGE_wpad" .config || true
-
-      - name: Compile firmware
-        run: make -j1 V=s
+          
+          echo "=== 3. 开始编译 ==="
+          make -j1 V=s
 
       - name: Generate MD5 checksum
         run: |
