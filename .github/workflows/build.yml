@@ -87,21 +87,22 @@ jobs:
           # 第一次defconfig，此时会自动选中wpad-full-openssl
           make defconfig
 
-      - name: Prepare wpad source and Patch【第一次打补丁】
+      - name: Prepare wpad source and Patch 【第一次打补丁】
         run: |
-          # prepare wpad包，wpad-full才会解压内置hostapd源码
+          # prepare wpad包，解压内置hostapd源码
           make package/network/services/wpad/prepare V=s 2>&1 | tail -30
           
           # wpad包内hostapd.c路径
           HOSTAPD_C=$(find build_dir -path "*wpad*src/ap/hostapd.c" 2>/dev/null | head -1)
           if [ -n "$HOSTAPD_C" ]; then
-            echo "✅ 找到 wpad内置hostapd.c: $HOSTAPD_C"
+            echo "✅ 找到 wpad内置 hostapd.c: $HOSTAPD_C"
             cp "$HOSTAPD_C" "$HOSTAPD_C.bak"
-            sed -i 's|hapd->iface->conf->he_mu_edca\.he_qos_info|0|g' "$HOSTAPD_C"
-            echo "Patch完成，检查残留："
+            # 本行前加 // 注释原代码，单行注释最安全
+            sed -i 's|.*hapd->iface->conf->he_mu_edca\.he_qos_info.*|\/\/ &|' "$HOSTAPD_C"
+            echo "Patch 完成，检查残留："
             grep "he_mu_edca" "$HOSTAPD_C" || echo "✅ he_mu_edca 引用已清除"
           else
-            echo "⚠️ wpad prepare未找到hostapd.c，wpad-full未选中，无需打补丁"
+            echo "⚠️ wpad prepare 未找到 hostapd.c，可能未选中 wpad-full"
           fi
 
       - name: Post-fix (尝试锁定 wpad-basic-openssl)
@@ -118,11 +119,12 @@ jobs:
         run: |
           HOSTAPD_C=$(find build_dir -path "*wpad*src/ap/hostapd.c" 2>/dev/null | head -1)
           if [ -n "$HOSTAPD_C" ]; then
-            if grep -q "he_mu_edca\.he_qos_info" "$HOSTAPD_C"; then
-              echo "⚠️ Patch 丢失，重新打补丁"
-              sed -i 's|hapd->iface->conf->he_mu_edca\.he_qos_info|0|g' "$HOSTAPD_C"
+            # 查找没有被//注释的目标代码行
+            if grep -q "^[^/]*hapd->iface->conf->he_mu_edca\.he_qos_info" "$HOSTAPD_C"; then
+              echo "⚠️ Patch 丢失，重新执行补丁"
+              sed -i 's|.*hapd->iface->conf->he_mu_edca\.he_qos_info.*|\/\/ &|' "$HOSTAPD_C"
             fi
-            echo "✅ 最终检查:"
+            echo "✅ 最终检查："
             grep "he_mu_edca" "$HOSTAPD_C" || echo "he_mu_edca 引用已清除"
           else
             echo "未找到 wpad 源码，无需 patch"
@@ -136,11 +138,6 @@ jobs:
           grep "CONFIG_DRIVER_11AX_SUPPORT" .config || true
           echo "=== wpad 选择 ==="
           grep -E "CONFIG_PACKAGE_wpad" .config || true
-          if grep -q "CONFIG_PACKAGE_wpad-full-openssl=y" .config; then
-            echo "❌ wpad-full-openssl仍然被选中！源码已打补丁，继续编译"
-            # 如需严格校验，取消下面注释，发现wpad-full直接终止
-            # exit 1
-          fi
 
       - name: Compile firmware
         run: make -j1 V=s
