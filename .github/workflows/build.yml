@@ -37,18 +37,18 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Patch ath11k remove mesh_offload callback（仓库源码层面修复内核驱动报错）
+      - name: Patch ath11k remove mesh_offload callback
         run: |
           find package/ -name mac.c | xargs sed -i 's|.*\.config_mesh_offload_path = ath11k_mac_op_config_mesh_offload_path.*|\/\/ &|g'
 
-      - name: Generate .config，不指定wpad，交由仓库依赖自动选择wpad-full
+      - name: Generate .config
         run: |
           echo "CONFIG_TARGET_qualcommax=y" > .config
           echo "CONFIG_TARGET_qualcommax_ipq807x=y" >> .config
           echo "CONFIG_TARGET_MULTI_PROFILE=y" >> .config
           echo "CONFIG_TARGET_qualcommax_ipq807x_DEVICE_xiaomi_ax3600=y" >> .config
 
-          # NSS + ECM 硬件加速
+          # NSS + ECM
           echo "CONFIG_PACKAGE_kmod-qca-nss-drv=y" >> .config
           echo "CONFIG_PACKAGE_kmod-qca-nss-ecm=y" >> .config
           echo "CONFIG_PACKAGE_kmod-qca-nss-dp=y" >> .config
@@ -86,27 +86,32 @@ jobs:
           echo "CONFIG_PACKAGE_ipq-wifi-xiaomi-ax3600=y" >> .config
           echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
 
-          # 执行 defconfig 让构建系统补齐依赖（此时会自动选中 wpad-full-openssl）
           make defconfig
 
-      - name: Compile firmware
+      - name: First compile attempt (expected to fail at hostapd)
         run: |
-          echo "=== 1. 提前解压 hostapd + wpad 源码 ==="
-          make package/network/services/hostapd/prepare V=s 2>&1 | tail -10
-          make package/network/services/wpad/prepare V=s 2>&1 | tail -10
+          echo "=== 第一次编译，预期 hostapd 报错，完成源码解压 ==="
+          make -j1 V=s || echo ">>>>>>第一次编译失败，属于预期行为，继续执行补丁<<<<<<"
+          
+          echo "=== 列出已解压 hostapd.c 文件 ==="
+          find build_dir -name "hostapd.c" | head -10
 
-          echo "=== 2. 编译前最终补丁：暴力注释 hostapd.c 中的 he_mu_edca ==="
+      - name: Patch hostapd after source extraction
+        run: |
+          echo "=== 修复 he_mu_edca 编译错误 ==="
           find build_dir -name "hostapd.c" | while read file; do
             if grep -q "he_mu_edca" "$file"; then
-              echo "正在修复: $file"
+              echo "正在修复文件: $file"
               sed -i 's/.*he_mu_edca.*/\/\/ &/' "$file"
-              grep "he_mu_edca" "$file" || echo "✅ $file he_mu_edca 已注释"
+              grep "he_mu_edca" "$file" || echo "✅ $file 注释完成"
             else
-              echo "无需修复: $file"
+              echo "跳过: $file"
             fi
           done
-          
-          echo "=== 3. 开始编译 ==="
+
+      - name: Second compile (final build)
+        run: |
+          echo "=== 第二次编译，直接编译已修改源码 ==="
           make -j1 V=s
 
       - name: Generate MD5 checksum
