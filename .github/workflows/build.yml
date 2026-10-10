@@ -1,5 +1,4 @@
 name: Build Gaojianli ImmortalWrt-NSS for AX3600
-
 on:
   workflow_dispatch:
 
@@ -37,18 +36,18 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Patch ath11k remove mesh_offload callback（修复ieee80211_ops结构体报错）
+      - name: Patch ath11k remove mesh_offload callback（仓库源码层面修复内核驱动报错）
         run: |
           find package/ -name mac.c | xargs sed -i 's|.*\.config_mesh_offload_path = ath11k_mac_op_config_mesh_offload_path.*|\/\/ &|g'
 
-      - name: Generate .config (基础配置，不要写 wpad，让它自动选)
+      - name: Generate .config，不指定wpad，交由仓库依赖自动选择wpad-full
         run: |
           echo "CONFIG_TARGET_qualcommax=y" > .config
           echo "CONFIG_TARGET_qualcommax_ipq807x=y" >> .config
           echo "CONFIG_TARGET_MULTI_PROFILE=y" >> .config
           echo "CONFIG_TARGET_qualcommax_ipq807x_DEVICE_xiaomi_ax3600=y" >> .config
 
-          # NSS + ECM
+          # NSS + ECM 硬件加速
           echo "CONFIG_PACKAGE_kmod-qca-nss-drv=y" >> .config
           echo "CONFIG_PACKAGE_kmod-qca-nss-ecm=y" >> .config
           echo "CONFIG_PACKAGE_kmod-qca-nss-dp=y" >> .config
@@ -78,48 +77,40 @@ jobs:
           echo "CONFIG_PACKAGE_firewall4=y" >> .config
           echo "CONFIG_PACKAGE_htop=y" >> .config
 
-          # WiFi6 11AX支持
+          # WiFi6 11AX
           echo "CONFIG_DRIVER_11AX_SUPPORT=y" >> .config
-
-          # ath11k无线驱动
           echo "CONFIG_PACKAGE_kmod-ath11k=y" >> .config
           echo "CONFIG_PACKAGE_kmod-ath11k-ahb=y" >> .config
           echo "CONFIG_PACKAGE_ath11k-firmware-ipq8074=y" >> .config
           echo "CONFIG_PACKAGE_ipq-wifi-xiaomi-ax3600=y" >> .config
           echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
 
-          # 第一次 defconfig，让构建系统补齐所有依赖
           make defconfig
 
-      - name: Prepare wpad source (提前解压源码)
+      - name: Prepare wpad source（解压wpad-full源码）
         run: |
-          # 解压 wpad 源码，确保 build_dir 里有 hostapd.c 可以修改
           make package/network/services/wpad/prepare V=s 2>&1 | tail -10
 
-      - name: Pre-Compile Patch (编译前最终补丁)
+      - name: Pre-Compile Patch hostapd.c 注释he_mu_edca
         run: |
-          echo "=== 开始对所有 hostapd.c 进行暴力补丁 ==="
-          # 查找所有 hostapd.c 文件并注释掉包含 he_mu_edca 的行
+          echo "=== 开始 hostapd he_mu_edca 补丁 ==="
           find build_dir -name "hostapd.c" | while read file; do
             if grep -q "he_mu_edca" "$file"; then
               echo "正在修复: $file"
-              # 把包含 he_mu_edca 的整行注释掉，避免 C 语言语法错误
               sed -i 's/.*he_mu_edca.*/\/\/ &/' "$file"
-              echo "修复后检查残留："
-              grep "he_mu_edca" "$file" || echo "✅ $file 已修复"
+              echo "修复后检查:"
+              grep "he_mu_edca" "$file" || echo "✅ $file he_mu_edca 已注释"
             else
               echo "无需修复: $file"
             fi
           done
-          echo "=== 补丁全部完成 ==="
+          echo "=== hostapd补丁完成 ==="
 
       - name: Verify config
         run: |
-          echo "=== 设备 ==="
+          echo "=== Target Device ==="
           grep -E "CONFIG_TARGET_qualcommax_ipq807x_DEVICE" .config || true
-          echo "=== 11AX ==="
-          grep "CONFIG_DRIVER_11AX_SUPPORT" .config || true
-          echo "=== wpad 选择（不管选什么，源码已 patch） ==="
+          echo "=== wpad package ==="
           grep -E "CONFIG_PACKAGE_wpad" .config || true
 
       - name: Compile firmware
