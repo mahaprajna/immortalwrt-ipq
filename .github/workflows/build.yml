@@ -37,10 +37,6 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Patch ath11k remove mesh_offload callback
-        run: |
-          find package/ -name mac.c | xargs sed -i 's|.*\.config_mesh_offload_path = ath11k_mac_op_config_mesh_offload_path.*|\/\/ &|g'
-
       - name: Generate .config
         run: |
           echo "CONFIG_TARGET_qualcommax=y" > .config
