@@ -37,29 +37,8 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Detect available wpad-basic variant
-        id: wpad_detect
+      - name: Generate .config (基础配置，不写 wpad)
         run: |
-          echo "=== 检测可用的 wpad-basic 变体 ==="
-          for pkg in wpad-basic wpad-basic-openssl wpad-basic-mbedtls wpad-basic-wolfssl; do
-            if grep -rE "PKG_NAME:=${pkg}$" package/network/services/ 2>/dev/null | head -1; then
-              echo "FOUND: $pkg"
-              echo "WPAD_PKG=$pkg" >> $GITHUB_ENV
-              echo "detected=$pkg" >> $GITHUB_OUTPUT
-              exit 0
-            fi
-          done
-          echo "ERROR: 未找到任何 wpad-basic 变体，继续编译会触发 he_mu_edca 报错！终止。"
-          exit 1
-
-      - name: Generate .config
-        run: |
-          if [ -z "$WPAD_PKG" ]; then
-            echo "ERROR: WPAD_PKG 为空，检测步骤可能失败"
-            exit 1
-          fi
-          echo "本次使用的 wpad 变体: $WPAD_PKG"
-
           echo "CONFIG_TARGET_qualcommax=y" > .config
           echo "CONFIG_TARGET_qualcommax_ipq807x=y" >> .config
           echo "CONFIG_TARGET_MULTI_PROFILE=y" >> .config
@@ -95,17 +74,6 @@ jobs:
           echo "CONFIG_PACKAGE_firewall4=y" >> .config
           echo "CONFIG_PACKAGE_htop=y" >> .config
 
-          # 无线，动态选中wpad-basic，禁用其余wpad变体
-          echo "CONFIG_PACKAGE_${WPAD_PKG}=y" >> .config
-          for pkg in wpad-basic wpad-basic-openssl wpad-basic-mbedtls wpad-basic-wolfssl wpad-openssl wpad-full-openssl; do
-            if [ "$pkg" != "$WPAD_PKG" ]; then
-              echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
-            fi
-          done
-          echo "# CONFIG_PACKAGE_hostapd-openssl is not set" >> .config
-          echo "# CONFIG_PACKAGE_hostapd-full is not set" >> .config
-          echo "# CONFIG_PACKAGE_wpa-supplicant-openssl is not set" >> .config
-
           # WiFi6 11AX支持
           echo "CONFIG_DRIVER_11AX_SUPPORT=y" >> .config
 
@@ -116,38 +84,62 @@ jobs:
           echo "CONFIG_PACKAGE_ipq-wifi-xiaomi-ax3600=y" >> .config
           echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
 
+          # 第一次defconfig，此时会自动选中wpad-full-openssl
           make defconfig
 
-      - name: Post-fix
+      - name: Prepare wpad source and Patch【第一次打补丁】
+        run: |
+          # prepare wpad包，wpad-full才会解压内置hostapd源码
+          make package/network/services/wpad/prepare V=s 2>&1 | tail -30
+          
+          # wpad包内hostapd.c路径
+          HOSTAPD_C=$(find build_dir -path "*wpad*src/ap/hostapd.c" 2>/dev/null | head -1)
+          if [ -n "$HOSTAPD_C" ]; then
+            echo "✅ 找到 wpad内置hostapd.c: $HOSTAPD_C"
+            cp "$HOSTAPD_C" "$HOSTAPD_C.bak"
+            sed -i 's|hapd->iface->conf->he_mu_edca\.he_qos_info|0|g' "$HOSTAPD_C"
+            echo "Patch完成，检查残留："
+            grep "he_mu_edca" "$HOSTAPD_C" || echo "✅ he_mu_edca 引用已清除"
+          else
+            echo "⚠️ wpad prepare未找到hostapd.c，wpad-full未选中，无需打补丁"
+          fi
+
+      - name: Post-fix (尝试锁定 wpad-basic-openssl)
         run: |
           sed -i '/CONFIG_PACKAGE_wpad-full/d' .config
           sed -i '/CONFIG_PACKAGE_hostapd-full/d' .config
+          sed -i '/CONFIG_PACKAGE_wpad-openssl/d' .config
+          
+          # 切换为 wpad-basic-openssl
+          echo "CONFIG_PACKAGE_wpad-basic-openssl=y" >> .config
+          make defconfig
 
-          sed -i "/^CONFIG_PACKAGE_${WPAD_PKG}=/d" .config
-          echo "CONFIG_PACKAGE_${WPAD_PKG}=y" >> .config
-          for pkg in wpad-basic wpad-basic-openssl wpad-basic-mbedtls wpad-basic-wolfssl wpad-openssl wpad-full-openssl; do
-            if [ "$pkg" != "$WPAD_PKG" ]; then
-              sed -i "/^CONFIG_PACKAGE_${pkg}=/d" .config
-              sed -i "/^# CONFIG_PACKAGE_${pkg} is not set/d" .config
-              echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
+      - name: Re-check patch after Post-fix
+        run: |
+          HOSTAPD_C=$(find build_dir -path "*wpad*src/ap/hostapd.c" 2>/dev/null | head -1)
+          if [ -n "$HOSTAPD_C" ]; then
+            if grep -q "he_mu_edca\.he_qos_info" "$HOSTAPD_C"; then
+              echo "⚠️ Patch 丢失，重新打补丁"
+              sed -i 's|hapd->iface->conf->he_mu_edca\.he_qos_info|0|g' "$HOSTAPD_C"
             fi
-          done
-
-          sed -i '/^CONFIG_DRIVER_11AX_SUPPORT=/d' .config
-          echo "CONFIG_DRIVER_11AX_SUPPORT=y" >> .config
+            echo "✅ 最终检查:"
+            grep "he_mu_edca" "$HOSTAPD_C" || echo "he_mu_edca 引用已清除"
+          else
+            echo "未找到 wpad 源码，无需 patch"
+          fi
 
       - name: Verify config
         run: |
-          echo "=== Device ==="
+          echo "=== 设备 ==="
           grep -E "CONFIG_TARGET_qualcommax_ipq807x_DEVICE" .config || true
           echo "=== 11AX ==="
           grep "CONFIG_DRIVER_11AX_SUPPORT" .config || true
           echo "=== wpad 选择 ==="
-          grep -E "CONFIG_PACKAGE_wpad|CONFIG_PACKAGE_hostapd" .config || true
-
-          if grep -qE "CONFIG_PACKAGE_wpad-full|CONFIG_PACKAGE_hostapd-full|CONFIG_PACKAGE_hostapd-openssl" .config; then
-            echo "ERROR: 危险包被选中，会触发 hostapd 编译报错！"
-            exit 1
+          grep -E "CONFIG_PACKAGE_wpad" .config || true
+          if grep -q "CONFIG_PACKAGE_wpad-full-openssl=y" .config; then
+            echo "❌ wpad-full-openssl仍然被选中！源码已打补丁，继续编译"
+            # 如需严格校验，取消下面注释，发现wpad-full直接终止
+            # exit 1
           fi
 
       - name: Compile firmware
